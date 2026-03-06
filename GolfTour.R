@@ -5,18 +5,21 @@
 
 GolfTour=read.table("G:\\PythonS\\R_stats\\GolfTour.txt",header=FALSE)
 colnames(GolfTour) = c("Avg Dist", "Drive Accuracy(%)", "Gender")
+# Prepend the index so it is column 1
+GolfTour <- cbind(Index = 1:nrow(GolfTour), GolfTour)
+
 head(GolfTour)
 summary(GolfTour)
 
 # LPGA Stats (Gender(Female) = 1)
 
-datF <- subset(GolfTour, Gender==1, select=1:2)
+datF <- subset(GolfTour, Gender==1, select=1:3)
 print(datF)
 
 pairs(datF, c("Avg Dist", "Drive Accuracy(%)"))
 
 # PGA Stats
-datM <- subset(GolfTour, Gender==2, select=1:2)
+datM <- subset(GolfTour, Gender==2, select=1:3)
 print(datM)
 
 #pairs(datM, c("Avg Dist", "Drive Accuracy(%)"))
@@ -980,7 +983,7 @@ print(ppd_high)
 # 3. Flag the "Black Swans"
 datM$Anomaly_Status <- ifelse(datM$`Drive Accuracy(%)` < (ppd_low * 100), "Structural Failure",
                               ifelse(datM$`Drive Accuracy(%)` > (ppd_high * 100), "Genius", "System Normal"))
-print(datM)
+print(datM$Anomaly_Status)
 
 # 4. View the "Wanted List"
 outlier_audit <- datM %>% filter(Anomaly_Status != "System Normal")
@@ -1030,7 +1033,70 @@ print(black_swans)
 outlier_audit <- datM[datM$Forensic_Label != "System Normal", ]
 
 print(outlier_audit)
+#### method 3 
+###### Add Z-score classification # check avg dist column everywhere  check tmrw
 
+# 1. Calculate the Mean and SD of the Posterior Predictive for each golfer
+ppd_mean <- apply(ppd_m, 2, mean)
+ppd_sd   <- apply(ppd_m, 2, sd)
+
+# 2. Calculate Forensic Z-Score (The 'Surprise' Unit)
+# This measures how many PPD standard deviations away the actual data is
+datM$Forensic_Z <- (datM$accuracy_prop_M - ppd_mean) / ppd_sd
+
+# 3. Define the Structural Failure Bounds
+
+library(knitr)
+library(kableExtra)
+
+# Define the Forensic Framework
+forensic_table <- data.frame(
+  Label = c("Black Swan: Genius", "Strong Performance", "System Normal", 
+            "Structural Stress", "Black Swan: Failure"),
+  `Z-Score Bound` = c("Z > 2.5", "1.8 < Z <= 2.5", "-2.0 <= Z <= 1.8", 
+                      "-3.0 < Z < -2.0", "Z <= -3.0"),
+  `Physical Meaning` = c("System-defying efficiency; needs 'Genius Check.'",
+                         "Elite but within expected system variance.",
+                         "Expected noise/nominal operation.",
+                         "49% Outlier: Significant underperformance.",
+                         "Mechanical/Structural collapse.")
+)
+
+# Render the Table
+library(knitr)
+library(kableExtra)
+
+kable(forensic_table, 
+      format = "html", 
+      caption = "Forensic Z-Score Classification: PGA Accuracy Audit",
+      align = "lll") %>%
+  kable_styling(bootstrap_options = c("condensed"), 
+                full_width = FALSE, 
+                position = "left") %>%
+  # Row 1: The Genius Limit
+  row_spec(1, bold = TRUE, color = "white", background = "#000000") %>% 
+  # Row 2: Elite Performance
+  row_spec(2, bold = TRUE, color = "white", background = "#228B22") %>%
+  # Row 3: Nominal Noise
+  row_spec(3, bold = FALSE, color = "black", background = "#D3D3D3") %>%
+  # Row 4: Your 49% "Stress" Point
+  row_spec(4, bold = TRUE, color = "white", background = "#FF8C00") %>%
+  # Row 5: The Failure Limit
+  row_spec(5, bold = TRUE, color = "white", background = "#D7261E")
+
+datM$Forensic_Label <- "System Normal"
+datM$Forensic_Label[datM$Forensic_Z < -3.0] <- "BLACK SWAN: FAILURE"
+datM$Forensic_Label[datM$Forensic_Z < -2.0 & datM$Forensic_Z >= -3.0] <- "Structural Stress"
+datM$Forensic_Label[datM$Forensic_Z > 2.5]  <- "BLACK SWAN: GENIUS"
+datM$Forensic_Label[datM$Forensic_Z > 1.8 & datM$Forensic_Z <= 2.5]  <- "Strong Performance" 
+
+# 4. View the forensic  Outlier audit
+audit <- datM %>% filter(Forensic_Label != "System Normal")%>%
+  
+print(audit[, c("Index","Avg Dist", "accuracy_prop_M", "Forensic_Z", "Forensic_Label")])
+#    Avg Dist accuracy_prop_M Forensic_Z     Forensic_Label
+#1    285.5       0.4900508  -2.305481    Structural Stress
+#2    272.1       0.8024569   1.827152   Strong Performance
 
 ##### Inside PIT (MCMC to simulation)
 # This is directly related to MCMC. When you ran stan_betareg, the MCMC sampler didn't just find one "best" line; it found 4,000 
@@ -1060,8 +1126,8 @@ print(outlier_audit)
 # A Beta distribution doesn't use mu and phi directly to draw a random number. It uses two shape parameters: alpha (hits) and 
 # beta (misses). The computer calculates these for every single iteration:
 
-alpha_s = mu_s * phi_s
-beta_s = (1 - mu_s).phi_s
+#alpha_s = mu_s * phi_s
+#beta_s = (1 - mu_s).phi_s
 
 # 3. The "Roll of the Dice" (The Random Draw)Now the computer has a specific "cloud" shape defined by $(\alpha_s, \beta_s)$. 
 # It performs a Random Sample:It reaches into that specific Beta distribution.It pulls out one single value ($y^*_s$) between $0$ and $1$.
@@ -1084,7 +1150,35 @@ beta_s = (1 - mu_s).phi_s
 # Precision (ϕ),     Posterior Samples, "Controls the ""Spread"" of the bucket 4,000 times."
 # The Draw (y∗),     rbeta() function,  "The actual ""Randomness"" that creates the range."
 
+### Method Selection Table 
+
+# Define the Comparison Data
+method_comparison <- data.frame(
+  Method = c("PIT Score", "99% Bounds", "Forensic Z"),
+  Strength = c("Detects cumulative probability.", 
+               "Hard physical cutoff.", 
+               "Measures relative intensity of surprise."),
+  `Why it failed / Best` = c("Caught the 'Genius' but the 'Failure' was still too close to the 0.01 cutoff.",
+                             "Useless: The 'Blurry' model made the safety net so wide that failure became 'legal'.",
+                             "Best: It forces the model to acknowledge how far the 49% is from the expected mean.")
+)
+
+# Render the Comparison Table
+kable(method_comparison, 
+      format = "html", 
+      caption = "Comparative Audit of Outlier Detection Mechanisms",
+      align = "lll") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE, 
+                position = "left") %>%
+  # Highlight the failing 99% bounds in gray to show lack of utility
+  row_spec(2, color = "#777777", italic = TRUE) %>%
+  # Highlight the Forensic Z as the winner in Forest Green
+  row_spec(3, bold = TRUE, color = "white", background = "#228B22")
+
 ## Visualizing Probability cloud for Black Swan Event 
+
+#1. print(audit[, c("Avg Dist", "accuracy_prop_M", "Forensic_Z", "Forensic_Label")])
 
 
 # 1. Identify the outlier (assuming it's at index 'j')
@@ -1107,6 +1201,7 @@ phi <- post_samples$`(phi)`
 # 3. Calculate the Mean (mu) and Shapes (alpha, beta) for this specific distance
 mu_samples <- plogis(beta0 + beta1 * dist_outlier)
 print(mu_samples)
+
 alpha_samples <- mu_samples * phi 
 print(alpha_samples)
 beta_samples <- (1 - mu_samples) * phi  
@@ -1114,7 +1209,7 @@ print(beta_samples)
 
 # 4. Get the Median Shape for the "Expected" Distribution
 alpha_med <- median(alpha_samples) # 35.2418
-
+print(alpha_med)
 beta_med <- median(beta_samples) # 19.79751
 
 # 5. Plotting Beta pdf (Expected) and overlay the Actual performance 
@@ -1422,6 +1517,7 @@ hist(swan_samples,
 abline(v = mean(swan_samples), col = "red", lwd = 2, lty = 2)
 
 # Sensitivity Gap 
+# Global Gap 
 # Get the average 'comfort' of the model
 avg_loglik <- mean(loglik_vals) # 1.59148
 
@@ -1431,13 +1527,54 @@ swan_loglik <- mean(loglik_vals[, "207"]) # -0.8006965
 # The Gap: If this is small, your model is LOW RESOLUTION
 print(avg_loglik - swan_loglik) #2.392177
 
+
+# Systemic Ceiling 
+# Use the Specific Gap (2.49) for your portfolio. It highlights the maximum contrast, which makes for a more compelling argument that the model's resolution is capped.
+# Compare the "Normal" golfer (Index 158) vs the "Black Swan" (Index 207)
+mean_normal <- mean(loglik_vals[, "158"]) # or index 1
+mean_swan   <- mean(loglik_vals[, "207"])
+
+# The Delta (The 'Sensitivity' of your current model)
+sensitivity_gap <- mean_normal - mean_swan
+print(sensitivity_gap) #2.489487
+# If your sensitivity_gap is small (less than 3.0), your model is Low-Resolution. It isn't penalizing the "Black Swan" enough. This is exactly why your PIT histogram has a hump—the model is treating a massive failure (49%) as only "slightly less likely" than a perfect hit.
+# Create the comparison dataframe
+plot_df <- data.frame(
+  Golfer = c("Normal (158)", "Black Swan (207)"),
+  LogLik = c(mean_normal, mean_swan)
+)
+ggplot(plot_df, aes(x = Golfer, y = LogLik, fill = Golfer)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_text(aes(label = round(LogLik, 3)), vjust = -0.5) +
+  theme_minimal() +
+  labs(title = "The Systemic Ceiling: Low-Resolution Comparison",
+       subtitle = paste("Sensitivity Gap:", round(sensitivity_gap, 3)),
+       y = "Mean Log-Likelihood") +
+  scale_fill_manual(values = c("red", "gray60"))
+
 # Comment on Resolution 
+# In Bayesian model comparison and information theory, a difference of 3.0 in log-units is a standard "Rule of Thumb" for significant 
+# evidence. It is derived from the Kullback-Leibler (KL) Divergence and the scale of Log-Odds.
+
+# Log-Likelihood Difference < 2: Considered "Weak" or "Barely Worth Mentioning."
+
+# Log-Likelihood Difference of 2 to 3: "Positive" evidence, but not overwhelming. This is where you are now (2.49).
+
+# Log-Likelihood Difference > 3: "Strong" evidence. This is the threshold where a data scientist can confidently say, "This point is fundamentally different from the rest of the system."
+
+# By staying below 3.0, your model is essentially "mumbling" that the Black Swan might be an outlier, rather than "shouting" it.
+
+
 #1. gap of 2.39 is mediocre.Since log-likelihood is on a log scale, a difference of 2.39 means the model finds the "Normal" golfer 
 # about e^{2.39} ~ 11 times more likely than the "Black Swan.
 #2."The High-Resolution Standard: For a 49% accuracy failure at a structural limit (285 yards), an expert-level model should show a 
 # gap of 5.0 to 10.0 (e^5~ 148 times more likely).
 #3. Why 2.39 is "Blurry": Your current model is "gaslighting" the data by using a global phi = 55. It is forcing the Black Swan 
 # to be "almost normal" just to keep the math simple.
+
+# Model Type,         Gap Score,   Meaning
+# Current (Lazy ϕ),   2.49,        "Low Resolution: Outlier is ""tolerated.""" 
+# Target (Dynamic ϕ), > 5.0,       "High Definition: Outlier is ""exposed.""" 
 
 #### Log-likelihood Cliff 
 # It visualizes the "Systemic Blindness" by showing how the model's comfort drops off as it encounters  outlier.
@@ -1456,13 +1593,14 @@ ggplot(plot_data, aes(x = Internal_Index, y = Surprise, color = Is_Swan)) +
   geom_point(alpha = 0.7, size = 3, shape = 18) +
   geom_hline(yintercept = avg_loglik, linetype = "dashed", color = "gray40", size = 0.8) +
   scale_color_manual(values = c("black", "red")) +
+  scale_y_continuous(breaks = c(-1, -0.8, 0,1, 1.59))+
   labs(title = "Log-Likelihood Cliff",
-       subtitle = "Red point indicates the Black Swan (Row 207)\nSystemic Blindness : model's comfort drops off as it encounters an outlier ",
+       subtitle = "Red point indicates the Black Swan (Row 207) | Sensitivity Gap: 2.489\nSystemic Blindness : model's comfort drops off as it encounters an outlier ",
        x = "Golfer Index (Model Internal)",
        y = "Mean Log-Likelihood") +
   theme_minimal()
 
-# Overlay this with Beta HD to show the X% improvement in modeling
+# Overlay this with Beta HD to show the X % improvement in modeling
 
 ##### Verdict
 # "I identified a 'blur' in the baseline Bayesian regression where a constant precision parameter ($\phi$) caused the model to be 
@@ -1480,12 +1618,114 @@ ggplot(plot_data, aes(x = Internal_Index, y = Surprise, color = Is_Swan)) +
 # Systemic Normal Illusion 
 #1. Check index 165 (which your datM labeled "Efficiency Genius"):
 # Values: 1.03, 1.27, 1.12.
-# 2The Comparison: Your "Black Swan" (207) has a score of -0.7, and your "Genius" (165) has a score of +1.1.
+#2.The Comparison: Your "Black Swan" (207) has a score of -0.7, and your "Genius" (165) has a score of +1.1.
 # The Gap: The mathematical distance between a "Structural Failure" and an "Efficiency Genius" is only about 1.8 units. This gap is 
 # too small. This is the Systemic Ceiling—the model is compressing all human performance into a narrow band because it can't 
 # distinguish between skill and noise.
 
 #################################################################################
+
+# Precision Resolution plot 
+# This is the "Focus Adjustment". If you model phi as a function of distance, you can plot the Model's Certainty across the 
+# yardage gradient.
+
+# Low Res 
+# Logic to visualize why the PIT is humped
+# We compare the 'Global' phi (current) vs a 'Dynamic' phi (needed)
+# Get the point estimate for phi
+
+### Clean column names to avoid back tick hell 
+#colnames(datM)[colnames(datM) == "Avg Dist"] <- "avg_dist"
+#colnames(datM)[colnames(datM) == "Drive Accuracy(%)"] <- "drive_accuracy_pct"
+
+phi_global <- bayesian_golf_beta_M_3$phi # Assuming brms/stan
+print(phi_global) # 55.03805
+
+ggplot(datM, aes(x = `Avg Dist`)) +
+  # Current 'Lazy' Model
+  geom_hline(aes(yintercept = phi_global, color = "Global Phi\nConstant (Blurry)"), 
+             linetype = "dashed", size = 0.8) +
+  
+  # Structural Boundaries
+  geom_vline(xintercept = c(270, 285, 290, 310), color = "red", 
+             linetype = "dashed", alpha = 0.5, size = 0.6) +
+  
+  # The 'High-Definition' Path
+  geom_smooth(aes(y = 1/abs(accuracy_prop_M - mean(accuracy_prop_M)), 
+                  color = "Dynamic (HD-Path)"), 
+              method = "loess", se = TRUE, alpha = 0.2) + 
+  
+  # Region Annotations
+  annotate("text", x = 265, y = 600, label = "The Fog", angle = 90, size = 3.5, color = "gray40") +
+  annotate("text", x = 277, y = 600, label = "Blind Spot", angle = 90, size = 3.5, color = "gray40") +
+  annotate("text", x = 287.5, y = 600, label = "Precision Peak", angle = 90, size = 3.5, color = "purple") +
+  annotate("text", x = 300, y = 600, label = "Efficiency Zone", angle = 90, size = 3.5, color = "gray40") +
+  annotate("text", x = 315, y = 600, label = "Entropy Zone", angle = 90, size = 3.5, color = "gray40") +
+  
+  # Aesthetic Mapping
+  scale_color_manual(name = "Model Resolution", 
+                     values = c("Global Phi\nConstant (Blurry)" = "blue", 
+                                "Dynamic (HD-Path)" = "purple")) +
+  scale_x_continuous(breaks = c(260, 270, 285, 290, 300, 310)) +
+  
+  theme_minimal() +
+  labs(title = "Required Resolution vs. Current Resolution Decision Plot",
+       subtitle = "Purple Peak at 287y unmasks the 'Black Swan' Resolution Deficit\nGlobal Phi: 55.04|Required Phi at Swan:156.71| Deficit Factor:2.85",
+       y = "Precision (Phi)", 
+       x = "Distance (Yards)") +
+  theme(legend.position = "bottom",
+        panel.grid.minor = element_blank())
+# Regions 
+#1. 260–270 (The Fog): High epistemic uncertainty (wide SE ribbon). The model is guessing due to low data density.
+#2. 270–285 (The Blind Spot): The constant model is actually over-resolved here. It's assuming more precision than the data suggests 
+##.is necessary.
+#3. 285–290 (The Precision Peak): This is the "Black Swan" territory. The data demands phi ~ 200, but your model is capped 
+# at 55. This is where the Resolution Deficit is maxed out.
+#4.290–310 (The Efficiency Zone): Normal operating range where the model's "blurry" resolution is actually close to the dynamic 
+## requirement.
+#5.310+ (The Entropy Zone): Precision requirements collapse as the distance approaches the limit of the physical system.
+
+# The Diagnostic: The constant model (Blue) assumes a uniform system precision, while the dynamic path (Purple) reveals a massive 
+# spike in required precision at 285–290 yards.
+
+# The Systematic Failure: Because the blue line sits far below the purple peak, the model lacks the "resolution" to recognize the 
+# 49% accuracy golfer as a true anomaly.
+
+# The Recommendation: To break this "Systemic Ceiling," we must transition to a Heteroskedastic Beta Regression (HD Model), allowing 
+# the model's surprise sensitivity to scale with the physical demands of the distance.
+
+# Where the purple line is far above the blue line, your model is under-confident (too much noise). Where it's below, your model is 
+# over-confident. This mismatch is exactly what creates the "Hump" in your PIT histogram because the probability residuals aren't 
+# being distributed correctly.  
+# The Black Swan Blindness: At the 285-yard mark, if the Blue line stays far from the required Purple precision, the model fails to 
+# "punish" the 49% accuracy score, resulting in the mediocre Sensitivity Gap of 2.49 you calculated.
+
+##### Quantifying Deficit 
+# Predict required phi at 285 yards using the loess model
+loess_fit <- loess(1/abs(accuracy_prop_M - mean(accuracy_prop_M)) ~ `Avg Dist`, data = datM)
+required_phi_at_swan <- predict(loess_fit, newdata = data.frame(`Avg Dist` = 285))
+print(required_phi_at_swan) #156.7079 
+
+# Calculate the Deficit Factor
+deficit_factor <- required_phi_at_swan / phi_global
+print(paste("The model is under-resolved by a factor of:", round(deficit_factor, 2)))
+# "The model is under-resolved by a factor of: 2.85" 
+
+### Prior Predictive Check 
+# by refitting the model while ignoring the likelihood (sampling only from the prior), your priors were already "lazy" before they 
+# even saw the 49% golfer.
+
+# Refit the model sampling only from the priors
+prior_only_model <- update(bayesian_golf_beta_M_3, prior_PD = TRUE)
+
+# Run the check
+
+y_rep_prior <- posterior_predict(prior_only_model)
+ppc_dens_overlay(datM$accuracy_prop_M, y_rep_prior[1:50, ]) + 
+  ggtitle("Prior Predictive Check: Are your priors too blurry?")
+
+
+
 # High-Definition Beta Model
 
 library(brms)
